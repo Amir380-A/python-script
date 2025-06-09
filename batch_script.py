@@ -1,56 +1,73 @@
 import requests
 import random
-import socket
 import time
-from datetime import datetime, timezone
 import os
+import json
+from datetime import datetime, timezone
 from dotenv import load_dotenv
+import socket
 
 load_dotenv()
 
-# Configuration
-URL = os.getenv("CRIBL_URL") 
-BEARER_TOKEN = os.getenv("CRIBL_BEARER")
+URL = os.getenv("CRIBL_URL")
+HEC_TOKEN = os.getenv("CRIBL_BEARER")
 BATCH_SIZE = 5
 SLEEP_SECONDS = 5
 
-# HTTP headers
 headers = {
-    "Authorization": f"Bearer {BEARER_TOKEN}",
-    "Content-Type": "text/plain"  
+    "Authorization": f"Bearer {HEC_TOKEN}",
+    "Content-Type": "application/json"
 }
 
-# Random data sources
 levels = ["INFO", "WARN", "ERROR", "DEBUG"]
-users = [f"user{i}" for i in range(1, 50)]
+users = [f"user{i}" for i in range(1, 51)]
 services = [f"service{i}" for i in range(1, 10)]
 messages = [
     "User login successful", "Disk space low", "Service stopped",
-    "Memory usage normal", "CPU usage high"
+    "Memory usage normal", "CPU usage high", "Database connection established",
+    "Cache miss occurred", "API request processed",
+    "File uploaded successfully", "Network timeout detected"
 ]
 
-# Event generator
-def generate_event():
-    ts = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    level = random.choice(levels)
-    msg = random.choice(messages)
-    user = random.choice(users)
-    service = random.choice(services)
-    return f"{ts} {level} {msg} - {user} - {service}"
+def generate_log_line():
+    ts = datetime.now(timezone.utc).isoformat()
+    return f"{ts} {random.choice(levels)} {random.choice(messages)} - {random.choice(users)} - {random.choice(services)}"
 
-# Main loop
-try:
-    while True:
-        batch_events = [generate_event() for _ in range(BATCH_SIZE)]
-        payload = "\n".join(batch_events)
-        response = requests.post(URL, headers=headers, data=payload)
+def send_log_batch():
+    logs = [generate_log_line() for _ in range(BATCH_SIZE)]
+    events = [{
+        "time": int(datetime.now(timezone.utc).timestamp()),
+        "host": socket.gethostname(),
+        "source": "python_batch_generator",
+        "sourcetype": "random_logs",
+        "event": log
+    } for log in logs]
 
-        print(f"[Batch] Sent {BATCH_SIZE} events → Status: {response.status_code}")
-        if response.status_code != 200:
-            print(f"Response Text: {response.text}")
+    payload = "\n".join(json.dumps(e) for e in events)
 
-        print(f"Sleeping {SLEEP_SECONDS}s...\n")
-        time.sleep(SLEEP_SECONDS)
+    try:
+        r = requests.post(URL, headers=headers, data=payload, timeout=5)
+        if r.ok:
+            print(f"Sent {BATCH_SIZE} logs | Sample: {logs[0]}")
+            return True
+        else:
+            print(f"Error {r.status_code}: {r.text.strip()[:100]}")
+    except Exception as e:
+        print(f"Request error: {e}")
 
-except KeyboardInterrupt:
-    print("Stream stopped by user.")
+    return False
+
+if __name__ == "__main__":
+    print("Starting log generator (Ctrl+C to stop)")
+    count = success = 0
+
+    try:
+        while True:
+            count += 1
+            if send_log_batch():
+                success += 1
+            time.sleep(SLEEP_SECONDS)
+    except KeyboardInterrupt:
+        print("\nStopped by user")
+        print(f"Batches sent: {success}/{count}")
+        print(f"Total logs: {success * BATCH_SIZE}")
